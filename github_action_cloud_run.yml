@@ -1,0 +1,62 @@
+name:  GCP Build and deploy python app to Cloud Run
+env:
+  PROJECT_ID: PROJECT_ID_HERE 
+  GAR_LOCATION: europe-west1 
+  SERVICE: SERVICE_CLOUD_RUN_HERE
+  REGION: europe-west1
+  WIF_PROVIDER: projects/33333333333/locations/global/workloadIdentityPools/github-actions-identity-pool/providers/github
+  SERVICE_ACCOUNT: PROJECT_NAME_SERVICE_ACCOUNT@cs-host-32323232323.iam.gserviceaccount.com
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    permissions:
+      contents: "read"
+      id-token: "write"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Google Auth
+        id: auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          project_id: '${{ env.PROJECT_ID }}'
+          workload_identity_provider: '${{ env.WIF_PROVIDER }}'
+          token_format: 'access_token'
+          service_account: "${{env.SERVICE_ACCOUNT}}" 
+  
+      # Authenticate Docker to Google Cloud Artifact Registry
+      - name: Docker Auth
+        id: docker-auth
+        uses: 'docker/login-action@v1'
+        with:
+          username: 'oauth2accesstoken'
+          password: '${{ steps.auth.outputs.access_token }}'
+          registry: '${{ env.GAR_LOCATION }}-docker.pkg.dev'
+
+      - name: Build and Push Container
+        working-directory: ${{env.BUILD_WORKING_DIR}}
+        run: |-
+          docker build -f Dockerfile -t "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/CLOUD_RUN_SVC_NAME:${{ github.sha }}" .
+          docker push "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/CLOUD_RUN_SVC_NAME:${{ github.sha }}"
+
+      # END - Docker auth and build
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          # NOTE: If using a pre-built image, update the image name here
+          image: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/CLOUD_RUN_SVC_NAME:${{ github.sha }}
+          env_vars: |
+            BUCKET_NAME=raw-input-data-bucket
+
+      # If required, use the Cloud Run url output in later steps
+      - name: Show Output
+        run: echo ${{ steps.deploy.outputs.url }}
+ 
